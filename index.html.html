@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Buraco Negro Musical</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&display=swap');
+
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #000;
+            font-family: 'Orbitron', sans-serif;
+        }
+
+        #visualizerCanvas {
+            position: fixed;
+            top: 0;
+            left: 0;
+            outline: none;
+        }
+
+        .ui-container {
+            position: absolute;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 10;
+            text-align: center;
+            color: white;
+            text-shadow: 0 0 10px rgba(255, 150, 255, 0.8);
+        }
+
+        h1 { margin: 0; font-size: 2.5em; }
+        p { color: #ccc; font-size: 0.9em; margin-top: 5px; }
+        .upload-wrapper { margin-top: 20px; }
+        input[type="file"] { display: none; }
+
+        .custom-file-upload {
+            background-color: rgba(80, 0, 144, 0.7);
+            color: white;
+            padding: 12px 25px;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: background-color 0.3s ease, transform 0.2s ease;
+            border: 1px solid rgba(200, 100, 255, 0.8);
+            backdrop-filter: blur(5px);
+        }
+
+        .custom-file-upload:hover {
+            background-color: rgba(112, 0, 180, 0.9);
+            transform: scale(1.05);
+        }
+
+        audio {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 80%;
+            max-width: 600px;
+            z-index: 10;
+            opacity: 0.7;
+            transition: opacity 0.3s;
+        }
+        audio:hover { opacity: 1; }
+    </style>
+</head>
+<body>
+
+    <script async src="https://unpkg.com/es-module-shims@1.6.3/dist/es-module-shims.js"></script>
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://unpkg.com/three@0.157.0/build/three.module.js",
+            "three/addons/": "https://unpkg.com/three@0.157.0/examples/jsm/",
+            "simplex-noise": "https://cdn.skypack.dev/simplex-noise@4.0.0"
+        }
+    }
+    </script>
+
+    <canvas id="visualizerCanvas"></canvas>
+
+    <div class="ui-container">
+        <h1>Visualizador de Buraco Negro</h1>
+        <div class="upload-wrapper">
+            <label for="audioFile" class="custom-file-upload">Escolher Arquivo de Áudio</label>
+            <input type="file" id="audioFile" accept="audio/*">
+        </div>
+    </div>
+    <audio id="audioPlayer" controls></audio>
+
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import { createNoise3D } from 'simplex-noise';
+
+        const FATOR_SUAVIZACAO = 0.08; 
+        const HUE_SHIFT_SPEED = 0.03;
+
+        let scene, camera, renderer, controls;
+        let analyser, dataArray, bufferLength;
+        let points; 
+        let clock = new THREE.Clock();
+        
+        let particleProperties = [];
+        const noise = createNoise3D();
+        let smoothedBassLevel = 0;
+
+        let auraExterna, anelDeFotons, blackHoleOutline;
+        const tempColor = new THREE.Color();
+
+        const bassHistory = new Array(60).fill(0);
+        let historyIndex = 0;
+        let beatIntensity = 0; 
+        
+       // tempo de batida
+        const BEAT_COOLDOWN = 0.12; 
+        let lastBeatTime = 0;
+
+        function lerp(start, end, amt) {
+            return (1 - amt) * start + amt * end;
+        }
+
+        function init() {
+            scene = new THREE.Scene();
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 2000);
+            camera.position.set(0, 70, 160);
+            const canvas = document.getElementById('visualizerCanvas');
+            renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
+            controls = new OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            createBackground();
+            createBlackHole();
+            createAuras();
+            createAccretionDisk();
+            createBlackHoleOutline();
+            window.addEventListener('resize', onWindowResize);
+            animate();
+        }
+        
+        function createBackground() {
+            scene.background = new THREE.Color(0x000000);
+        }
+        
+        function createBlackHole() {
+            const geometry = new THREE.SphereGeometry(18, 64, 64); 
+            const material = new THREE.MeshBasicMaterial({ color: 0x000000 });
+            const blackHole = new THREE.Mesh(geometry, material);
+            scene.add(blackHole);
+        }
+
+        function createBlackHoleOutline() {
+            const geometry = new THREE.SphereGeometry(18.5, 64, 64);
+            const material = new THREE.MeshBasicMaterial({ 
+                color: 0xff00ff,
+                transparent: true,
+                opacity: 0.6,
+                blending: THREE.AdditiveBlending,
+                side: THREE.BackSide
+            });
+            blackHoleOutline = new THREE.Mesh(geometry, material);
+            scene.add(blackHoleOutline);
+        }
+
+        function createAuras() {
+            const loader = new THREE.TextureLoader();
+            loader.load('https://raw.githubusercontent.com/mrdoob/three.js/master/examples/textures/lensflare/lensflare0_alpha.png', (texture) => {
+                const anelMaterial = new THREE.SpriteMaterial({
+                    map: texture, color: 0xffe0ff, blending: THREE.AdditiveBlending,
+                    transparent: true, opacity: 1.0, depthWrite: false
+                });
+                anelDeFotons = new THREE.Sprite(anelMaterial);
+                anelDeFotons.scale.set(38, 38, 1); 
+                scene.add(anelDeFotons);
+
+                const auraMaterial = new THREE.SpriteMaterial({
+                    map: texture, color: 0x0088ff, blending: THREE.AdditiveBlending,
+                    transparent: true, opacity: 0.5, depthWrite: false
+                });
+                auraExterna = new THREE.Sprite(auraMaterial);
+                auraExterna.scale.set(80, 80, 1); 
+                scene.add(auraExterna);
+            });
+        }
+
+        function createAccretionDisk() {
+            const particleCount = 10000; 
+            const positions = new Float32Array(particleCount * 3);
+            const colors = new Float32Array(particleCount * 3);
+            const innerRadius = 25;
+            const outerRadius = 110;
+
+            for (let i = 0; i < particleCount; i++) {
+                const initialRadius = Math.random() * (outerRadius - innerRadius) + innerRadius;
+                const angle = Math.random() * Math.PI * 2;
+                positions.set([Math.cos(angle) * initialRadius, (Math.random() - 0.5) * 6, Math.sin(angle) * initialRadius], i * 3);
+                
+                const color = new THREE.Color();
+                const intensity = 1.0 - (initialRadius - innerRadius) / (outerRadius - innerRadius);
+                const hue = 0.55 + intensity * 0.3;
+                const lightness = 0.5;
+                const saturation = 0.9;
+                color.setHSL(hue, saturation, lightness);
+                colors.set([color.r, color.g, color.b], i * 3);
+
+                particleProperties.push({
+                    initialRadius: initialRadius, angle: angle,
+                    speed: (1 / initialRadius) * 45 + 0.02, 
+                    currentRadius: initialRadius, currentY: positions[i * 3 + 1],
+                    initialHue: hue, currentColor: { h: hue, s: saturation, l: lightness }
+                });
+            }
+
+            const geometry = new THREE.BufferGeometry();
+            geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+            geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+            
+            const material = new THREE.PointsMaterial({ size: 0.8, vertexColors: true, blending: THREE.AdditiveBlending, transparent: true, opacity: 0.9 });
+            points = new THREE.Points(geometry, material);
+            scene.add(points);
+        }
+
+        function setupAudio() {
+            const audioFile = document.getElementById('audioFile');
+            const audioPlayer = document.getElementById('audioPlayer');
+            audioFile.addEventListener('change', function() {
+                const file = this.files[0];
+                if(file) {
+                    const url = URL.createObjectURL(file);
+                    audioPlayer.src = url;
+                    let audioContext = window.audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+                    window.audioCtx = audioContext;
+                    let source = window.audioSource || audioContext.createMediaElementSource(audioPlayer);
+                    window.audioSource = source;
+                    analyser = audioContext.createAnalyser();
+                    source.connect(analyser);
+                    analyser.connect(audioContext.destination);
+                    analyser.fftSize = 512;
+                    bufferLength = analyser.frequencyBinCount;
+                    dataArray = new Uint8Array(bufferLength);
+                    audioPlayer.play();
+                }
+            });
+        }
+        
+        function animate() {
+            requestAnimationFrame(animate);
+
+            const delta = clock.getDelta();
+            const elapsedTime = clock.getElapsedTime();
+
+            if (analyser) {
+                analyser.getByteFrequencyData(dataArray);
+                const currentBassLevel = (dataArray[0] + dataArray[1] + dataArray[2] + dataArray[3]) / (4 * 255);
+                
+                const averageBass = bassHistory.reduce((a, b) => a + b, 0) / bassHistory.length;
+                
+                // gatilho das batidas, talvez precise alterar dependendo da musica, mas isso é pra outro projeto
+                const BEAT_THRESHOLD = 1.25; 
+                const currentTime = elapsedTime;
+
+                if (currentBassLevel > averageBass * BEAT_THRESHOLD && (currentTime - lastBeatTime) > BEAT_COOLDOWN) {
+                    beatIntensity = 1.0; 
+                    lastBeatTime = currentTime;
+                }
+
+                bassHistory[historyIndex] = currentBassLevel;
+                historyIndex = (historyIndex + 1) % bassHistory.length;
+                smoothedBassLevel = lerp(smoothedBassLevel, currentBassLevel, FATOR_SUAVIZACAO * 0.5);
+
+                if(anelDeFotons && auraExterna) {
+                    anelDeFotons.material.opacity = 1.0 + beatIntensity;
+                    auraExterna.material.opacity = 0.4 + smoothedBassLevel * 0.6 + beatIntensity * 0.2;
+                }
+                
+                if (blackHoleOutline) {
+                    blackHoleOutline.material.opacity = 0.6 + beatIntensity * 0.4;
+                }
+            }
+            
+            beatIntensity *= 0.92;
+
+            if (points && particleProperties.length > 0) {
+                const positions = points.geometry.attributes.position.array;
+                const colors = points.geometry.attributes.color.array;
+                
+                const COLOR_FATOR_SUAVIZACAO = FATOR_SUAVIZACAO * 2.5;
+
+                for (let i = 0; i < particleProperties.length; i++) {
+                    const p = particleProperties[i];
+                    p.angle += p.speed * delta;
+
+                    // ALTERADO: Valores revertidos para o original
+                    const normalPulse = smoothedBassLevel * 20.0;
+                    const kickPulse = beatIntensity * 75.0; 
+                    const totalPulse = normalPulse + kickPulse;
+
+                    const turbulence = noise(p.initialRadius * 0.01, p.angle, elapsedTime * 0.2) * 5.0;
+                    const targetRadius = p.initialRadius + turbulence + totalPulse;
+                    
+                    const localAmplitude = analyser ? dataArray[i % bufferLength] / 255.0 : 0;
+                    const wave = Math.sin(p.initialRadius * 0.1 + elapsedTime) * 2;
+                    const targetY = wave + localAmplitude * 18.0;
+
+                    p.currentRadius = lerp(p.currentRadius, targetRadius, FATOR_SUAVIZACAO);
+                    p.currentY = lerp(p.currentY, targetY, FATOR_SUAVIZACAO);
+                    
+                    const shiftingBaseHue = (p.initialHue + elapsedTime * HUE_SHIFT_SPEED) % 1.0;
+                    const energy = Math.min(1.0, (localAmplitude * 1.8) + beatIntensity);
+                    let targetHue;
+                    if (energy < 0.5) {
+                        targetHue = lerp(shiftingBaseHue, (shiftingBaseHue + 0.3) % 1.0, energy * 2);
+                    } else {
+                        targetHue = lerp((shiftingBaseHue + 0.3) % 1.0, (shiftingBaseHue + 0.5) % 1.0, (energy - 0.5) * 2);
+                    }
+                    const targetLightness = lerp(0.5, 0.75, energy); 
+                    const targetSaturation = lerp(0.9, 1.0, energy);
+
+                    p.currentColor.h = lerp(p.currentColor.h, targetHue, COLOR_FATOR_SUAVIZACAO);
+                    p.currentColor.l = lerp(p.currentColor.l, targetLightness, COLOR_FATOR_SUAVIZACAO);
+                    p.currentColor.s = lerp(p.currentColor.s, targetSaturation, COLOR_FATOR_SUAVIZACAO);
+
+                    positions.set([
+                        Math.cos(p.angle) * p.currentRadius,
+                        p.currentY,
+                        Math.sin(p.angle) * p.currentRadius
+                    ], i * 3);
+                    
+                    tempColor.setHSL(p.currentColor.h, p.currentColor.s, p.currentColor.l);
+                    colors.set([tempColor.r, tempColor.g, tempColor.b], i * 3);
+                }
+                
+                points.geometry.attributes.position.needsUpdate = true;
+                points.geometry.attributes.color.needsUpdate = true;
+            }
+
+            controls.update();
+            renderer.render(scene, camera);
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        init();
+        setupAudio();
+    </script>
+</body>
+</html>
